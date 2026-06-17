@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.env
+
+# Project Specific
+data/
+logs/
+visualisations/*.png
+visualisations/*.html
+
+# IDE
+.vscode/
+.idea/
+.ipynb_checkpoints/

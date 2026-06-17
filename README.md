@@ -15,65 +15,73 @@ FluxSourceTypeMétéorologiqueNOAA Global Hourly Weather DataBatchMobilité urba
 
 Architecture
 
-Sources de données
+Sources de données (NOAA, CityBikes, OpenAQ)
       │
       ▼
-Ingestion (API / Scraping / Download)
+Ingestion (API / download / streaming)
       │
       ▼
-Stockage Data Lake (data/raw/)
+MinIO Bronze Bucket (urbanhub-bronze/ - Données brutes)
       │
       ▼
-Traitement Data Engineering (data/processed/)
+MinIO Silver Bucket (urbanhub-silver/ - Nettoyage, normalisation Parquet)
       │
       ▼
-Analyse & Visualisations (notebooks/)
+MinIO Gold Bucket (urbanhub-gold/ - Agrégations, croisement Parquet)
       │
       ▼
-Indicateurs urbains (reports/)
+Analyse & Visualisations (notebooks/ & visualisations/)
 
 
 Structure du dépôt
 
 urbanhub/
-├── README.md
-├── .gitignore
-├── requirements.txt
-├── .env.example
+├── docker-compose.yml           # Configuration MinIO S3
+├── .env.example                 # Modèle de variables d'environnement
+├── .env                         # Configuration locale (MinIO & clés API)
+├── requirements.txt             # Dépendances Python
+├── README.md                    # Documentation du dépôt
 │
-├── data/                        ← non versionné (.gitignore)
-│   ├── raw/
-│   │   ├── meteo/
-│   │   ├── velos/
-│   │   └── pollution/
-│   └── processed/
-│       ├── meteo/
-│       ├── velos/
-│       └── pollution/
+├── data/                        # Données locales (non versionné)
+├── logs/                        # Logs d'exécution (non versionné)
+│   ├── pipeline.log
+│   └── errors.log
 │
-├── notebooks/
-│   ├── 01_batch_meteo.ipynb
-│   ├── 02_streaming_velos.ipynb
-│   ├── 03_iot_pollution.ipynb
-│   └── 04_analyse_croisee.ipynb
+├── notebooks/                   # Analyses exploratoires et restitution
+│   ├── notebook_meteo.ipynb
+│   ├── notebook_velos.ipynb
+│   ├── notebook_pollution.ipynb
+│   └── notebook_croise.ipynb
 │
-├── src/
-│   ├── batch/                   ← Membre A — NOAA
-│   │   ├── download.py
-│   │   └── clean.py
-│   ├── streaming/               ← Membre B — CityBikes
-│   │   ├── collector.py
-│   │   └── clean.py
-│   ├── iot/                     ← Membre C — OpenAQ
-│   │   ├── ingestion.py
-│   │   └── clean.py
-│   └── utils/
-│       ├── storage.py
-│       └── helpers.py
+├── src/                         # Scripts de pipeline de données
+│   ├── common/                  # Code transverse et configurations
+│   │   ├── config.py
+│   │   ├── minio_client.py
+│   │   ├── logging_utils.py
+│   │   └── geo_utils.py
+│   │
+│   ├── meteo/                   # Membre A — NOAA Batch
+│   │   ├── download_noaa.py
+│   │   ├── clean_meteo.py
+│   │   └── aggregate_meteo.py
+│   │
+│   ├── velos/                   # Membre B — CityBikes Streaming
+│   │   ├── collect_velos.py
+│   │   ├── clean_velos.py
+│   │   └── aggregate_velos.py
+│   │
+│   ├── pollution/               # Membre C — OpenAQ IoT
+│   │   ├── collect_pollution.py
+│   │   ├── clean_pollution.py
+│   │   └── aggregate_pollution.py
+│   │
+│   └── cross/                   # Tous — Analyse Croisée
+│       └── merge_datasets.py
 │
-└── reports/
-    ├── figures/
-    └── rapport_final.pdf
+├── visualisations/              # Exports de figures et cartes
+└── docs/                        # Spécifications et rapports de synthèse
+    ├── schemas.md
+    └── rapport_final.md
 
 
 Installation
@@ -104,18 +112,27 @@ Utilisation
 
 Partie 1 — Flux Batch (Météo NOAA)
 
-bashpython src/batch/download.py   # Téléchargement parallèle des stations françaises
-python src/batch/clean.py      # Nettoyage et conversion des données
+```bash
+python src/meteo/download_noaa.py   # Téléchargement parallèle des stations françaises
+python src/meteo/clean_meteo.py      # Nettoyage et conversion des données vers Silver
+python src/meteo/aggregate_meteo.py  # Calcul des agrégats météo vers Gold
+```
 
 Partie 2 — Flux Streaming (CityBikes)
 
-bashpython src/streaming/collector.py   # Collecte automatique toutes les minutes
-python src/streaming/clean.py       # Traitement des snapshots
+```bash
+python src/velos/collect_velos.py    # Collecte en temps réel du snapshot vers Bronze
+python src/velos/clean_velos.py       # Extraction et formatage vers Silver
+python src/velos/aggregate_velos.py   # Calcul des taux d'usage vers Gold
+```
 
 Partie 3 — Flux IoT (OpenAQ)
 
-bashpython src/iot/ingestion.py   # Ingestion régulière simulant un flux IoT
-python src/iot/clean.py       # Nettoyage et structuration
+```bash
+python src/pollution/collect_pollution.py   # Ingestion régulière simulant un flux IoT
+python src/pollution/clean_pollution.py       # Nettoyage et structuration vers Silver
+python src/pollution/aggregate_pollution.py   # Dépassements de seuils vers Gold
+```
 
 Analyses exploratoires
 
@@ -166,9 +183,11 @@ Périodes d'interaction forte entre mobilité, pollution et météo
 
 Données
 
-Les données brutes et traitées ne sont pas versionnées (fichiers trop volumineux).
-
-SourcePériodeFormat stockageNOAA Global Hourly5 dernières annéesParquet, partitionné par année/stationCityBikes APIDepuis le déploiementCSV horodaté, partitionné par jourOpenAQ APICollecte en continuParquet, partitionné par polluant/ville/date
+| Source | Période | Format de stockage |
+| --- | --- | --- |
+| NOAA Global Hourly | 5 dernières années | Parquet Snappy, Bucket Silver & Gold |
+| CityBikes API | Temps réel (à partir du collecteur) | JSON dans Bronze, Parquet dans Silver & Gold |
+| OpenAQ API | Collecte en continu (France) | JSON dans Bronze, Parquet dans Silver & Gold |
 
 
 Variables extraites
@@ -204,9 +223,9 @@ git push origin feature/batch-meteo
 Convention de nommage des branches :
 
 
-feature/batch-meteo — Membre A
-feature/streaming-velos — Membre B
-feature/iot-pollution — Membre C
+feature/meteo — Membre A
+feature/velos — Membre B
+feature/pollution — Membre C
 feature/analyse-croisee — tous
 
 
@@ -221,9 +240,11 @@ refactor: refactoring sans changement fonctionnel
 
 
 
-Équipe
-
-MembreRôleFluxMembre AData Engineer – BatchMétéo NOAAMembre BData Engineer – StreamingCityBikesMembre CData Engineer – IoTOpenAQ
+| Membre | Rôle | Flux associés |
+| --- | --- | --- |
+| Membre A | Data Engineer – Batch | Météo NOAA |
+| Membre B | Data Engineer – Streaming | Vélos CityBikes |
+| Membre C | Data Engineer – IoT | Pollution OpenAQ |
 
 
 Licence
