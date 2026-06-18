@@ -89,7 +89,7 @@ def collecter_snapshot(reseaux: list):
     object_name = f"velos/snapshot_{timestamp}.json"
 
     upload_bytes(BUCKET_BRONZE, object_name, data, content_type="application/json")
-    log_info(f"Snapshot envoyé : {len(toutes_stations)} stations → Bronze/{object_name}")
+    log_info(f"Snapshot envoyé : {len(toutes_stations)} stations -> Bronze/{object_name}")
 
 
 def main():

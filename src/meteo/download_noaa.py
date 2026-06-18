@@ -58,14 +58,14 @@ def get_french_stations():
                 france["USAF"].astype(str).str.zfill(6) + "-" +
                 france["WBAN"].astype(str).str.zfill(5)
             )
-            print(f"[NOAA] ✅ {len(france)} stations françaises trouvées.")
+            print(f"[NOAA] [OK] {len(france)} stations françaises trouvées.")
             return france["station_file_id"].tolist()
 
         except Exception as e:
             print(f"[WARN] URL indisponible : {e}")
             continue
 
-    raise RuntimeError("❌ Impossible de récupérer la liste des stations NOAA.")
+    raise RuntimeError("[ERROR] Impossible de récupérer la liste des stations NOAA.")
 
 # ─── Téléchargement d'un fichier station / année ──────────────────────────────
 def download_station_year(station_id, year, minio_client, max_retries=3):
@@ -132,7 +132,7 @@ def download_all_stations(stations, years):
             else:
                 errors += 1
 
-    print(f"\n[NOAA] ✅ {success} téléchargés | ⏭️ {skipped} déjà présents | ❌ {errors} non disponibles")
+    print(f"\n[NOAA] [OK] {success} téléchargés | [SKIP] {skipped} déjà présents | [ERROR] {errors} non disponibles")
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

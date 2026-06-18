@@ -113,7 +113,7 @@ def calculer_indicateurs(df: pd.DataFrame) -> dict:
 
 
 def main():
-    log_info("=== Démarrage agrégation velos (Silver → Gold) ===")
+    log_info("=== Démarrage agrégation velos (Silver -> Gold) ===")
 
     # Charge tous les fichiers Silver
     fichiers = list_objects(BUCKET_SILVER, prefix="velos/")

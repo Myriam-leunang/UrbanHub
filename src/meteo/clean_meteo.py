@@ -212,7 +212,7 @@ def clean_all():
             print(f"[ERREUR] {obj.object_name} : {e}")
             errors += 1
 
-    print(f"\n[CLEAN] ✅ {success} fichiers nettoyés | ⚠️ {empty} vides | ❌ {errors} erreurs")
+    print(f"\n[CLEAN] [OK] {success} fichiers nettoyés | [WARN] {empty} vides | [ERROR] {errors} erreurs")
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -17,7 +17,14 @@ try:
 except ImportError:
     pass
 
-# Fallback S3 client definition
+# Import the actual MinIO operations from the common client
+try:
+    from src.common.minio_client import upload_file, download_file, list_objects
+    minio_available = True
+except ImportError:
+    minio_available = False
+
+# Fallback local S3 client simulation in case minio_client is not imported
 class LocalMinIOClientMock:
     def upload_file(self, local_path, bucket, object_name):
         path = os.path.join("data", bucket, object_name)
@@ -38,26 +45,18 @@ class LocalMinIOClientMock:
         return False
 
     def list_objects(self, bucket, prefix=""):
-        path = os.path.join("data", bucket)
+        path = os.path.join("data", bucket, prefix)
         if not os.path.exists(path):
             return []
         keys = []
         for root, _, files in os.walk(path):
             for file in files:
-                full_path = os.path.relpath(os.path.join(root, file), path)
+                full_path = os.path.relpath(os.path.join(root, file), os.path.join("data", bucket))
                 key = full_path.replace(os.path.sep, "/")
-                if key.startswith(prefix):
-                    keys.append(key)
+                keys.append(key)
         return keys
 
-minio_client = LocalMinIOClientMock()
-
-try:
-    from src.common.minio_client import minio_client
-    if not hasattr(minio_client, "download_file"):
-        minio_client = LocalMinIOClientMock()
-except ImportError:
-    pass
+local_mock = LocalMinIOClientMock()
 
 CITIES = ["paris", "lyon", "marseille", "toulouse", "bordeaux", "lille"]
 
@@ -65,7 +64,6 @@ def generate_mock_meteo_gold(city, dates):
     """Generate mock Gold meteorology aggregates for testing when NOAA script is not run."""
     rows = []
     for d in dates:
-        # Realistic seasonal temperatures based on month
         month = d.month
         base_temp = 12.0
         if month in [6, 7, 8]: base_temp = 22.0
@@ -95,7 +93,6 @@ def generate_mock_velos_gold(city, dates):
     """Generate mock Gold usage pressure aggregates for testing when CityBikes script is not run."""
     rows = []
     for d in dates:
-        # Usage pressure is higher on weekdays and mild weather days (e.g. temperature around 20 degrees)
         weekday = d.weekday()
         is_weekend = weekday >= 5
         base_pressure = 0.65 if not is_weekend else 0.45
@@ -115,16 +112,36 @@ def generate_mock_velos_gold(city, dates):
 
 def load_gold_dataset(bucket, prefix, default_generator, city, dates, tmpdir):
     """Download Gold parquet from MinIO S3, or generate mock if missing."""
-    keys = minio_client.list_objects(bucket, prefix=prefix)
+    keys = []
+    if minio_available:
+        try:
+            keys = list_objects(bucket, prefix=prefix)
+        except Exception as e:
+            logger.warning(f"MinIO list failed, listing locally: {e}")
+            
+    if not keys:
+        keys = local_mock.list_objects(bucket, prefix=prefix)
+        
     parquet_keys = [k for k in keys if k.endswith('.parquet')]
     
     if parquet_keys:
         local_file = os.path.join(tmpdir, "downloaded.parquet")
-        # Download the first found parquet
-        if minio_client.download_file(bucket, parquet_keys[0], local_file):
+        
+        downloaded = False
+        if minio_available:
+            try:
+                download_file(bucket, parquet_keys[0], local_file)
+                downloaded = True
+            except Exception as e:
+                logger.warning(f"MinIO download failed, trying local: {e}")
+                
+        if not downloaded:
+            if not local_mock.download_file(bucket, parquet_keys[0], local_file):
+                logger.warning(f"Could not download {parquet_keys[0]} locally.")
+                
+        if os.path.exists(local_file):
             try:
                 df = pd.read_parquet(local_file)
-                # Ensure date is format date
                 df['date'] = pd.to_datetime(df['date']).dt.date
                 return df
             except Exception as e:
@@ -137,14 +154,22 @@ def merge_city_datasets(city):
     """Merge daily aggregates for meteorology, bikes usage and pollution for a city."""
     logger.info(f"Merging datasets for city: {city}")
     
-    # We will work over the last 30 days for consolidated analysis
     end_date = datetime.utcnow()
     dates = [end_date - timedelta(days=i) for i in range(30)]
     
     with tempfile.TemporaryDirectory() as tmpdir:
-        # 1. Load Pollution Gold (Our own module's output)
         pollution_prefix = f"pollution/city={city}/"
-        pollution_keys = minio_client.list_objects("urbanhub-gold", prefix=pollution_prefix)
+        
+        pollution_keys = []
+        if minio_available:
+            try:
+                pollution_keys = list_objects("urbanhub-gold", prefix=pollution_prefix)
+            except Exception as e:
+                logger.warning(f"MinIO listing failed: {e}")
+                
+        if not pollution_keys:
+            pollution_keys = local_mock.list_objects("urbanhub-gold", prefix=pollution_prefix)
+            
         pollution_parquet = [k for k in pollution_keys if k.endswith('.parquet')]
         
         if not pollution_parquet:
@@ -152,35 +177,42 @@ def merge_city_datasets(city):
             return
             
         local_pol = os.path.join(tmpdir, "pollution.parquet")
-        minio_client.download_file("urbanhub-gold", pollution_parquet[0], local_pol)
+        
+        downloaded = False
+        if minio_available:
+            try:
+                download_file("urbanhub-gold", pollution_parquet[0], local_pol)
+                downloaded = True
+            except Exception as e:
+                logger.warning(f"MinIO download failed: {e}")
+                
+        if not downloaded:
+            local_mock.download_file("urbanhub-gold", pollution_parquet[0], local_pol)
+            
         pollution_df = pd.read_parquet(local_pol)
         pollution_df['date'] = pd.to_datetime(pollution_df['date']).dt.date
         
-        # 2. Load Météo Gold (developed by Personne 1, or simulated if missing)
         meteo_df = load_gold_dataset(
             bucket="urbanhub-gold",
-            prefix=f"meteo/city={city}/",
+            prefix=f"meteo/gold/", # NOAA script saves to meteo/gold/
             default_generator=generate_mock_meteo_gold,
             city=city,
             dates=dates,
             tmpdir=tmpdir
         )
         
-        # 3. Load Vélos Gold (developed by Personne 2, or simulated if missing)
         velos_df = load_gold_dataset(
             bucket="urbanhub-gold",
-            prefix=f"velos/city={city}/",
+            prefix=f"velos/", # Vélos script saves to velos/
             default_generator=generate_mock_velos_gold,
             city=city,
             dates=dates,
             tmpdir=tmpdir
         )
         
-        # Perform joins on 'city' and 'date'
         merged = pollution_df.merge(meteo_df, on=['date', 'city'], how='left')
         merged = merged.merge(velos_df, on=['date', 'city'], how='left')
         
-        # Fill missing values if any
         merged.fillna({
             "avg_temperature": 15.0,
             "avg_wind_speed": 5.0,
@@ -189,19 +221,35 @@ def merge_city_datasets(city):
             "pollution_episode_flag": False
         }, inplace=True)
         
-        # Upload consolidated dataset to Gold: cross/city=paris/merged_daily.parquet
         local_gold = os.path.join(tmpdir, f"merged_{city}.parquet")
         merged.to_parquet(local_gold, compression='snappy', index=False)
         
         gold_key = f"cross/city={city}/merged_daily.parquet"
-        minio_client.upload_file(local_gold, "urbanhub-gold", gold_key)
-        logger.info(f"Successfully uploaded Gold merged dataset: {gold_key}")
+        
+        uploaded = False
+        if minio_available:
+            try:
+                upload_file("urbanhub-gold", gold_key, local_gold)
+                uploaded = True
+            except Exception as e:
+                logger.warning(f"MinIO upload failed: {e}")
+                
+        if not uploaded:
+            local_mock.upload_file(local_gold, "urbanhub-gold", gold_key)
 
 def main():
     logger.info("Starting Gold datasets merge pipeline...")
-    # List cities in pollution gold bucket to identify cities to merge
-    gold_objects = minio_client.list_objects("urbanhub-gold", prefix="pollution/")
     
+    gold_objects = []
+    if minio_available:
+        try:
+            gold_objects = list_objects("urbanhub-gold", prefix="pollution/")
+        except Exception as e:
+            logger.warning(f"MinIO listing failed: {e}")
+            
+    if not gold_objects:
+        gold_objects = local_mock.list_objects("urbanhub-gold", prefix="pollution/")
+        
     cities = set()
     for obj in gold_objects:
         parts = obj.split('/')
@@ -210,7 +258,6 @@ def main():
                 cities.add(part.split('=')[1])
                 
     if not cities:
-        # Fallback to default target cities
         cities = CITIES
         logger.info(f"No active pollution gold directories found. Merging default cities: {cities}")
         

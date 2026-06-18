@@ -16,3 +16,4 @@ visualisations/*.html
 .vscode/
 .idea/
 .ipynb_checkpoints/
+project.md

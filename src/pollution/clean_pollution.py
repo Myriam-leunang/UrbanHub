@@ -17,7 +17,14 @@ try:
 except ImportError:
     pass
 
-# Fallback S3 client definition
+# Import the actual MinIO operations from the common client
+try:
+    from src.common.minio_client import upload_file, download_file, list_objects
+    minio_available = True
+except ImportError:
+    minio_available = False
+
+# Fallback local S3 client simulation in case minio_client is not imported
 class LocalMinIOClientMock:
     def upload_file(self, local_path, bucket, object_name):
         path = os.path.join("data", bucket, object_name)
@@ -38,44 +45,47 @@ class LocalMinIOClientMock:
         return False
 
     def list_objects(self, bucket, prefix=""):
-        path = os.path.join("data", bucket)
+        path = os.path.join("data", bucket, prefix)
         if not os.path.exists(path):
             return []
         keys = []
         for root, _, files in os.walk(path):
             for file in files:
-                full_path = os.path.relpath(os.path.join(root, file), path)
+                full_path = os.path.relpath(os.path.join(root, file), os.path.join("data", bucket))
                 key = full_path.replace(os.path.sep, "/")
-                if key.startswith(prefix):
-                    keys.append(key)
+                keys.append(key)
         return keys
 
-minio_client = LocalMinIOClientMock()
-
-try:
-    from src.common.minio_client import minio_client
-    if not hasattr(minio_client, "upload_file"):
-        minio_client = LocalMinIOClientMock()
-except ImportError:
-    pass
+local_mock = LocalMinIOClientMock()
 
 def clean_json_file(raw_key):
     """Parse raw OpenAQ json file, clean, map city, and save to Silver parquet."""
     logger.info(f"Processing raw OpenAQ file: {raw_key}")
     
-    # Extract file details: pollution/date=2026-06-17/snapshots_120511.json
     parts = raw_key.split('/')
     if len(parts) < 3:
         return
         
-    date_part = parts[1] # e.g. "date=2026-06-17"
-    filename = parts[2]  # e.g. "snapshots_120511.json"
+    date_part = parts[1] # e.g. "date=2026-06-18"
+    filename = parts[2]  # e.g. "snapshots_092858.json"
     
     with tempfile.TemporaryDirectory() as tmpdir:
         local_json = os.path.join(tmpdir, "raw.json")
-        if not minio_client.download_file("urbanhub-bronze", raw_key, local_json):
-            return
-            
+        
+        # Download from Bronze S3 or local fallback
+        downloaded = False
+        if minio_available:
+            try:
+                download_file("urbanhub-bronze", raw_key, local_json)
+                downloaded = True
+            except Exception as e:
+                logger.warning(f"MinIO download failed, trying local file fallback: {e}")
+                
+        if not downloaded:
+            if not local_mock.download_file("urbanhub-bronze", raw_key, local_json):
+                logger.error(f"Failed to find raw file: {raw_key}")
+                return
+                
         try:
             with open(local_json, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -90,17 +100,14 @@ def clean_json_file(raw_key):
                 lon = coords.get('longitude')
                 locality = location.get('locality', '')
                 
-                # Identify city using our geographical utility
                 city = find_nearest_city(lat, lon)
                 if city == "unknown" and locality:
-                    # Try direct string matching
                     loc_lower = locality.lower()
                     for target in ["paris", "lyon", "marseille", "toulouse", "bordeaux", "lille"]:
                         if target in loc_lower:
                             city = target
                             break
                             
-                # Exclude measurements with unknown or non-target cities
                 if city == "unknown":
                     continue
                     
@@ -113,7 +120,6 @@ def clean_json_file(raw_key):
                     val = sensor.get('value')
                     raw_dt = sensor.get('datetime')
                     
-                    # Normalize pollutant names
                     norm_pollutant = None
                     for name in ["pm25", "pm10", "no2", "o3", "co"]:
                         if name in pollutant_name.replace(".", ""):
@@ -123,11 +129,9 @@ def clean_json_file(raw_key):
                     if not norm_pollutant:
                         continue
                         
-                    # Filter aberrant values (negative values or overly high peaks)
                     if val is None or val < 0.0 or val > 1000.0:
                         continue
                         
-                    # Normalize timestamp
                     try:
                         ts = pd.to_datetime(raw_dt).strftime('%Y-%m-%dT%H:%M:%SZ')
                     except Exception:
@@ -151,21 +155,41 @@ def clean_json_file(raw_key):
             df = pd.DataFrame(cleaned_measurements)
             df.drop_duplicates(subset=['sensor_id', 'pollutant', 'timestamp'], inplace=True)
             
-            # Save by city to support partitioned loading
             for city_name, city_df in df.groupby('city'):
                 local_parquet = os.path.join(tmpdir, f"data_{city_name}.parquet")
                 city_df.to_parquet(local_parquet, compression='snappy', index=False)
                 
                 silver_key = f"pollution/city={city_name}/{date_part}/data_{filename.replace('.json', '.parquet')}"
-                minio_client.upload_file(local_parquet, "urbanhub-silver", silver_key)
-                logger.info(f"Uploaded Silver pollution parquet: {silver_key}")
                 
+                # Upload to Silver S3 or local fallback
+                uploaded = False
+                if minio_available:
+                    try:
+                        upload_file("urbanhub-silver", silver_key, local_parquet)
+                        uploaded = True
+                    except Exception as e:
+                        logger.warning(f"MinIO upload failed, trying local file fallback: {e}")
+                        
+                if not uploaded:
+                    local_mock.upload_file(local_parquet, "urbanhub-silver", silver_key)
+                    
         except Exception as e:
             logger.error(f"Error cleaning OpenAQ file {raw_key}: {e}")
 
 def main():
     logger.info("Starting OpenAQ clean pipeline...")
-    raw_files = minio_client.list_objects("urbanhub-bronze", prefix="pollution/")
+    
+    # List Bronze objects
+    raw_files = []
+    if minio_available:
+        try:
+            raw_files = list_objects("urbanhub-bronze", prefix="pollution/")
+        except Exception as e:
+            logger.warning(f"MinIO listing failed, listing locally: {e}")
+            
+    if not raw_files:
+        raw_files = local_mock.list_objects("urbanhub-bronze", prefix="pollution/")
+        
     logger.info(f"Found {len(raw_files)} raw pollution files to clean.")
     
     for raw_file in raw_files:

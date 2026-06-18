@@ -60,7 +60,7 @@ def download_file(bucket: str, object_name: str, dest_path: str):
     Télécharge un fichier depuis MinIO vers un chemin local.
     """
     client.fget_object(bucket, object_name, dest_path)
-    print(f"[MinIO] Fichier téléchargé : {bucket}/{object_name} → {dest_path}")
+    print(f"[MinIO] Fichier téléchargé : {bucket}/{object_name} -> {dest_path}")
 
 
 def list_objects(bucket: str, prefix: str = "") -> list:

@@ -5,7 +5,7 @@ import random
 import requests
 from datetime import datetime
 
-# Fallback logger definition in case logging_utils.py is not yet implemented
+# Fallback logger definition
 class SimpleLogger:
     def info(self, msg): print(f"INFO: {msg}")
     def warning(self, msg): print(f"WARNING: {msg}")
@@ -25,56 +25,12 @@ try:
 except ImportError:
     pass
 
-# Fallback local S3 client simulation in case minio_client.py is not yet implemented
-class LocalMinIOClientMock:
-    def upload_bytes(self, data, bucket, object_name):
-        path = os.path.join("data", bucket, object_name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(data)
-        logger.info(f"[Local Storage] Saved raw bytes to: {path}")
-        return True
-
-    def upload_file(self, local_path, bucket, object_name):
-        path = os.path.join("data", bucket, object_name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        import shutil
-        shutil.copy(local_path, path)
-        logger.info(f"[Local Storage] Copied file to: {path}")
-        return True
-
-    def download_file(self, bucket, object_name, local_path):
-        path = os.path.join("data", bucket, object_name)
-        if os.path.exists(path):
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            import shutil
-            shutil.copy(path, local_path)
-            logger.info(f"[Local Storage] Downloaded {object_name} from: {path}")
-            return True
-        logger.error(f"[Local Storage] Object {object_name} not found in {bucket}")
-        return False
-
-    def list_objects(self, bucket, prefix=""):
-        path = os.path.join("data", bucket)
-        if not os.path.exists(path):
-            return []
-        keys = []
-        for root, _, files in os.walk(path):
-            for file in files:
-                full_path = os.path.relpath(os.path.join(root, file), path)
-                key = full_path.replace(os.path.sep, "/")
-                if key.startswith(prefix):
-                    keys.append(key)
-        return keys
-
-minio_client = LocalMinIOClientMock()
-
+# Import the actual MinIO operations from the common client
 try:
-    from src.common.minio_client import minio_client
-    if not hasattr(minio_client, "upload_bytes"):
-        minio_client = LocalMinIOClientMock()
+    from src.common.minio_client import upload_bytes
+    minio_available = True
 except ImportError:
-    pass
+    minio_available = False
 
 CITIES_COORDS = {
     "paris": {"lat": 48.8566, "lon": 2.3522},
@@ -90,13 +46,11 @@ def generate_simulated_openaq_data():
     results = []
     now_str = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     
-    # Generate mock sensors measurements
     sensor_id_counter = 1000
     for city, coords in CITIES_COORDS.items():
         location_id = random.randint(100, 999)
         sensors = []
         
-        # Pollutants configuration: (name, unit, min_val, max_val)
         pollutants_config = [
             ("pm25", "µg/m³", 5.0, 35.0),
             ("pm10", "µg/m³", 10.0, 60.0),
@@ -107,9 +61,8 @@ def generate_simulated_openaq_data():
         
         for name, unit, min_val, max_val in pollutants_config:
             sensor_id_counter += 1
-            # Add some randomness and occasional spikes
             val = random.uniform(min_val, max_val)
-            if random.random() > 0.95:  # 5% chance of high pollution spike
+            if random.random() > 0.95:
                 val *= 2.0
                 
             sensors.append({
@@ -153,7 +106,6 @@ def main():
         logger.info("Using simulated quality-of-air data for France cities.")
         data = generate_simulated_openaq_data()
         
-    # Format dates and paths
     now = datetime.utcnow()
     date_str = now.strftime('%Y-%m-%d')
     time_str = now.strftime('%H%M%S')
@@ -161,16 +113,21 @@ def main():
     object_name = f"pollution/date={date_str}/snapshots_{time_str}.json"
     json_bytes = json.dumps(data).encode('utf-8')
     
-    # Store raw measurements in Bronze bucket
-    success = minio_client.upload_bytes(
-        data=json_bytes,
-        bucket="urbanhub-bronze",
-        object_name=object_name
-    )
-    if success:
-        logger.info(f"Successfully uploaded OpenAQ raw data to Bronze: {object_name}")
-    else:
-        logger.error("Failed to store data in Data Lake.")
+    # Store raw measurements in MinIO Bronze bucket
+    if minio_available:
+        try:
+            upload_bytes("urbanhub-bronze", object_name, json_bytes, content_type="application/json")
+            logger.info(f"Successfully uploaded OpenAQ raw data to MinIO Bronze: {object_name}")
+            return
+        except Exception as e:
+            logger.warning(f"MinIO upload failed, falling back to local file storage: {e}")
+            
+    # Fallback to local storage
+    path = os.path.join("data", "urbanhub-bronze", object_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(json_bytes)
+    logger.info(f"Saved raw bytes to local file storage: {path}")
 
 if __name__ == "__main__":
     main()

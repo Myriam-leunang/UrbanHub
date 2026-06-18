@@ -44,7 +44,7 @@ def save_parquet_to_minio(client, df, bucket, object_name):
         BytesIO(data), length=len(data),
         content_type="application/octet-stream"
     )
-    print(f"[Gold] ✅ Sauvegardé : {object_name}")
+    print(f"[Gold] [OK] Sauvegardé : {object_name}")
 
 # ─── Chargement de toutes les données Silver ──────────────────────────────────
 def load_all_silver(client):
@@ -60,11 +60,11 @@ def load_all_silver(client):
             print(f"[ERREUR] {obj.object_name} : {e}")
 
     if not dfs:
-        raise RuntimeError("❌ Aucune donnée Silver trouvée.")
+        raise RuntimeError("[ERROR] Aucune donnée Silver trouvée.")
 
     df_all = pd.concat(dfs, ignore_index=True)
     df_all["timestamp"] = pd.to_datetime(df_all["timestamp"], utc=True)
-    print(f"[AGG] ✅ {len(df_all):,} lignes chargées.")
+    print(f"[AGG] [OK] {len(df_all):,} lignes chargées.")
     return df_all
 
 # ─── Q1 : Périodes météorologiques anormales ──────────────────────────────────
@@ -191,7 +191,7 @@ def aggregate_all():
     df_extremes = detect_extreme_days(df)
     save_parquet_to_minio(client, df_extremes, BUCKET_GOLD, "meteo/gold/jours_extremes.parquet")
 
-    print("\n[AGG] 🎉 Agrégation terminée ! 4 fichiers Gold générés.")
+    print("\n[AGG] [OK] Agrégation terminée ! 4 fichiers Gold générés.")
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

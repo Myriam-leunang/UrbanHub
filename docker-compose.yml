@@ -8,7 +8,6 @@ services:
       - "9000:9000"      # API S3
       - "9001:9001"      # Console web
     environment:
-<<<<<<< HEAD
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     volumes:
@@ -27,13 +26,6 @@ services:
       - .:/home/jovyan/work
     depends_on:
       - minio
-=======
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data --console-address ":9001"
-    volumes:
-      - minio_data:/data
->>>>>>> 548abe31a0d667e605413e90a0c9efc37d75f0fc
     restart: unless-stopped
 
 volumes:

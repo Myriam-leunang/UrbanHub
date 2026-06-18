@@ -61,11 +61,11 @@ def sauvegarder_silver(df: pd.DataFrame, timestamp: str):
 
     object_name = f"velos/clean_{timestamp}.parquet"
     upload_bytes(BUCKET_SILVER, object_name, buffer.read(), content_type="application/octet-stream")
-    log_info(f"Silver sauvegardé : {len(df)} stations → {object_name}")
+    log_info(f"Silver sauvegardé : {len(df)} stations -> {object_name}")
 
 
 def main():
-    log_info("=== Démarrage nettoyage velos (Bronze → Silver) ===")
+    log_info("=== Démarrage nettoyage velos (Bronze -> Silver) ===")
 
     # Liste tous les snapshots Bronze disponibles
     snapshots = list_objects(BUCKET_BRONZE, prefix="velos/")
@@ -88,7 +88,7 @@ def main():
         df_clean = nettoyer(df)
 
         # Extrait le timestamp depuis le nom du fichier
-        # ex: velos/snapshot_2024-01-01T10-00-00Z.json → 2024-01-01T10-00-00Z
+        # ex: velos/snapshot_2024-01-01T10-00-00Z.json -> 2024-01-01T10-00-00Z
         timestamp = object_name.replace("velos/snapshot_", "").replace(".json", "")
 
         sauvegarder_silver(df_clean, timestamp)
